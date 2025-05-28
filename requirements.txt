@@ -1,0 +1,10 @@
+pandas
+numpy
+scikit-learn
+tensorflow==2.15.0 # Fija la versión de TensorFlow
+matplotlib
+mlflow
+openpyxl
+psycopg2-binary
+boto3
+pymysql

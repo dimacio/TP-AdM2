@@ -1,0 +1,150 @@
+services:
+  postgres:
+    image: postgres:13
+    container_name: mlflow_postgres_db
+    restart: always
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    networks:
+      - backend_net
+    environment:
+      POSTGRES_USER: ${PG_USER:-mlflow_user}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-mlflow_password}
+      POSTGRES_DB: ${PG_DATABASE:-mlflow_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-mlflow_user} -d ${PG_DATABASE:-mlflow_db} -h postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  s3: # MinIO
+    image: minio/minio:latest
+    container_name: mlflow_minio_s3
+    restart: always
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    networks:
+      - backend_net
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  create_s3_bucket:
+    image: minio/mc:latest
+    container_name: mlflow_mc_bucket_creator
+    depends_on:
+      s3:
+        condition: service_healthy
+    networks:
+      - backend_net
+    environment:
+      MC_HOST_S3ALIAS: http://${MINIO_ROOT_USER:-minioadmin}:${MINIO_ROOT_PASSWORD:-minioadmin}@s3:9000
+      # Esta variable tomará el valor de MLFLOW_BUCKET_NAME del host, o "mi-bucket-experimentos" si no está definida.
+      # Es crucial que este nombre sea el que tu script de Python espera.
+      BUCKET_TO_CREATE: ${MLFLOW_BUCKET_NAME:-mi-bucket-experimentos}
+    entrypoint: >
+      /bin/sh -c '
+        echo "Esperando a MinIO (servicio s3)...";
+        sleep 20; # Aumentado por si acaso
+        echo "Configurando alias mc para el servicio s3...";
+        mc alias set s3alias http://s3:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} --api S3v4;
+        echo "Alias s3alias configurado.";
+        
+        echo "Nombre del bucket a crear/verificar desde ENV: [$${BUCKET_TO_CREATE}]";
+        
+        if [ -z "$${BUCKET_TO_CREATE}" ]; then
+          echo "ERROR: BUCKET_TO_CREATE está vacío. No se puede continuar." >&2
+          exit 1;
+        fi
+
+        echo "Verificando/creando bucket: s3alias/$${BUCKET_TO_CREATE}";
+        if ! mc ls "s3alias/$${BUCKET_TO_CREATE}" > /dev/null 2>&1; then
+          echo "Bucket s3alias/$${BUCKET_TO_CREATE} no encontrado, creando...";
+          mc mb "s3alias/$${BUCKET_TO_CREATE}";
+          echo "Estableciendo política pública para s3alias/$${BUCKET_TO_CREATE}...";
+          mc policy set public "s3alias/$${BUCKET_TO_CREATE}";
+        else
+          echo "Bucket s3alias/$${BUCKET_TO_CREATE} ya existe.";
+        fi;
+        echo "Configuración de bucket completada.";
+        exit 0;
+      '
+
+      
+  mlflow: # Servidor MLflow
+    restart: always
+    build:
+      context: .
+      dockerfile: ./dockerfiles/Dockerfile.mlflow
+    image: mlflow_server_app_custom_image # Un nombre de imagen único
+    container_name: mlflow_server_instance
+    depends_on:
+      postgres:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+      create_s3_bucket:
+        condition: service_completed_successfully
+    ports:
+      - "${MLFLOW_PORT:-5001}:5000"
+    networks:
+      - backend_net
+    environment:
+      BACKEND_STORE_URI: postgresql://${PG_USER:-mlflow_user}:${PG_PASSWORD:-mlflow_password}@postgres:5432/${PG_DATABASE:-mlflow_db}
+      DEFAULT_ARTIFACT_ROOT: s3://${MLFLOW_BUCKET_NAME:-mi-bucket-experimentos}/artifacts
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MLFLOW_S3_ENDPOINT_URL: http://s3:9000
+    command: >
+      mlflow server
+      --backend-store-uri ${BACKEND_STORE_URI}
+      --default-artifact-root ${DEFAULT_ARTIFACT_ROOT}
+      --host 0.0.0.0
+      --port 5000
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+
+  yahoo_trainer: # Tu script de entrenamiento
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yahoo_training_script
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./plots_output:/app/plots
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MLFLOW_S3_ENDPOINT_URL: http://s3:9000
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME:-Prediccion_Acciones_LSTM_DC_Final}
+      MLFLOW_BUCKET_NAME: ${MLFLOW_BUCKET_NAME:-mi-bucket-experimentos}
+      TF_ENABLE_ONEDNN_OPTS: 0
+    networks:
+      - backend_net
+
+networks:
+  backend_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  minio_data:

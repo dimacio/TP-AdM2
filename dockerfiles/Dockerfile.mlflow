@@ -1,0 +1,21 @@
+# dockerfiles/Dockerfile.mlflow
+# Dockerfile para el servidor de MLflow
+
+FROM python:3.10-slim
+
+# Instalar dependencias del sistema (wget y curl para healthchecks o descargas)
+# ca-certificates es importante para conexiones https si fueran necesarias.
+RUN apt-get update && apt-get install -y wget curl ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Instalar dependencias de Python para MLflow server
+# psycopg2-binary para PostgreSQL, boto3 para S3 (MinIO), pymysql por si se usa MySQL en el futuro.
+RUN pip install --no-cache-dir mlflow psycopg2-binary boto3 pymysql
+
+# Exponer el puerto por defecto de MLflow
+EXPOSE 5000
+
+# El comando para iniciar el servidor se especificará en docker-compose.yml
+# No es necesario un entrypoint aquí si el comando de docker-compose es suficiente.
+# WORKDIR /mlflow_server # Opcional, si necesitas un directorio de trabajo específico
