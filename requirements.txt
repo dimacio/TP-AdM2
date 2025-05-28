@@ -1,9 +1,10 @@
 pandas
 numpy
 scikit-learn
-tensorflow==2.15.0 # Fija la versión de TensorFlow
+tensorflow==2.16.1 
+keras==3.9.0    
 matplotlib
-mlflow
+mlflow==2.12.2  
 openpyxl
 psycopg2-binary
 boto3

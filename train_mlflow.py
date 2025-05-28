@@ -8,11 +8,11 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_squared_error
 import matplotlib.pyplot as plt
 import mlflow
-import mlflow.keras # Para Keras
+import mlflow.keras 
 import os
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Input # Asegúrate de importar Input
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input 
 
 # --- Semillas para que esto sea reproducible ---
 np.random.seed(42)
@@ -121,7 +121,7 @@ def dividir_datos_cronologicamente(X_seq, y_seq, train_ratio, validation_ratio):
 
     if n_train == 0 or n_val == 0 or n_test <= 0:
         print(f"Aviso: División resulta en conjuntos vacíos o inválidos. Total: {n_total}, Train: {n_train}, Val: {n_val}, Test: {n_test}")
-        # Podrías devolver arrays vacíos aquí si esto es un error fatal para tu lógica
+        # Podría devolver arrays vacíos aquí si esto es un error fatal para tu lógica
         # return (np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([]))
 
 
@@ -249,6 +249,8 @@ if __name__ == "__main__":
         print(f"MLflow Run ID: {run.info.run_id}")
             
         # Loguear parámetros manualmente (autolog también lo hace, pero esto es para asegurar)
+        # La interacción entre TensorFlow y MLflow no es óptima
+
         params_to_log = {
             "data_path": DATA_PATH, "target_column": TARGET_COLUMN,
             "features_columns": str(FEATURES_COLUMNS), "lookback_window": LOOKBACK_WINDOW,
