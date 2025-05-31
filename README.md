@@ -14,3 +14,7 @@ Para acceder a Bucket (MinIO):
 ```
 http://localhost:9001
 ````
+Para ver log de errores de script: 
+```
+docker-compose logs yahoo_trainer
+```
