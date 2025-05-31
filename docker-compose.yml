@@ -14,7 +14,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-mlflow_user} -d ${PG_DATABASE:-mlflow_db} -h postgres"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${PG_USER:-mlflow_user} -d ${PG_DATABASE:-mlflow_db} -h postgres",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -81,7 +85,6 @@ services:
         exit 0;
       '
 
-      
   mlflow: # Servidor MLflow
     restart: always
     build:
@@ -113,7 +116,15 @@ services:
       --host 0.0.0.0
       --port 5000
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:5000/health",
+        ]
       interval: 15s
       timeout: 10s
       retries: 10
