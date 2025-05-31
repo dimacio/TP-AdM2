@@ -151,6 +151,147 @@ services:
       TF_ENABLE_ONEDNN_OPTS: 0
     networks:
       - backend_net
+  # --- Airflow Services ---
+
+  airflow_db:
+    image: postgres:13
+    container_name: airflow_postgres_db
+    restart: always
+    ports:
+      - "${AIRFLOW_DB_PORT:-5433}:5432" # Expose Airflow DB on a different host port
+    networks:
+      - backend_net
+    environment:
+      POSTGRES_USER: ${AIRFLOW_DB_USER:-airflow_user}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow_pass}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME:-airflow_db}
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${AIRFLOW_DB_USER:-airflow_user} -d ${AIRFLOW_DB_NAME:-airflow_db} -h localhost",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  airflow-init:
+    image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.9.2}
+    container_name: airflow_init
+    depends_on:
+      airflow_db:
+        condition: service_healthy
+    networks:
+      - backend_net
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow_user}:${AIRFLOW_DB_PASSWORD:-airflow_pass}@airflow_db:5432/${AIRFLOW_DB_NAME:-airflow_db}
+      # For local development, it's common to load example DAGs
+      AIRFLOW__CORE__LOAD_EXAMPLES: "true"
+      # The UID of the user running Airflow, should match your host user to avoid permission issues
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      # _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-""}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+    entrypoint: /bin/bash
+    command: # NEW CORRECTED STRUCTURE
+      - "-c"
+      - |
+        airflow db init && \
+        airflow users create \
+        --username admin \
+        --firstname Admin \
+        --lastname User \
+        --role Admin \
+        --email admin@example.com \
+        --password admin
+    # This service should only run once to initialize, then exit.
+    # For subsequent runs, it will detect the DB is initialized and exit quickly.
+
+  airflow-webserver:
+    image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.9.2}
+    container_name: airflow_webserver
+    restart: always
+    depends_on:
+      airflow-init: # Ensures DB is initialized before webserver starts
+        condition: service_completed_successfully # Or service_started if init is idempotent
+      airflow_db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks:
+      - backend_net
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow_user}:${AIRFLOW_DB_PASSWORD:-airflow_pass}@airflow_db:5432/${AIRFLOW_DB_NAME:-airflow_db}
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "true" # Consistent with init
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      # _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-""}
+      # For DockerOperator to connect to the Docker daemon on the host
+      # This requires mounting the Docker socket (see volumes below)
+      # DOCKER_HOST: unix:///var/run/docker.sock # If using DockerOperator to control host Docker
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      # If you plan to use the DockerOperator to interact with the host's Docker daemon:
+      # - /var/run/docker.sock:/var/run/docker.sock
+    command: airflow webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  airflow-scheduler:
+    image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.9.2}
+    container_name: airflow_scheduler
+    restart: always
+    depends_on:
+      airflow-init: # Ensures DB is initialized
+        condition: service_completed_successfully
+      airflow_db:
+        condition: service_healthy
+    networks:
+      - backend_net
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow_user}:${AIRFLOW_DB_PASSWORD:-airflow_pass}@airflow_db:5432/${AIRFLOW_DB_NAME:-airflow_db}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "true" # Consistent with init
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      # _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-""}
+      # DOCKER_HOST: unix:///var/run/docker.sock # If using DockerOperator
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      # - /var/run/docker.sock:/var/run/docker.sock # If using DockerOperator
+    command: airflow scheduler
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "airflow",
+          "jobs",
+          "check",
+          "--job-type",
+          "SchedulerJob",
+          "--hostname",
+          "$$(hostname)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 networks:
   backend_net:
@@ -159,3 +300,4 @@ networks:
 volumes:
   postgres_data:
   minio_data:
+  airflow_db_data:
