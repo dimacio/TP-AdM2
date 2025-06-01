@@ -32,6 +32,6 @@ docker-compose up -d yahoo_trainer
 
 ## Pendientes
 
-* Automatizar flujos de trabajo con Airflor
+* Automatizar flujos de trabajo con Airflow
 
 * Crear una API del modelo con Flask 
