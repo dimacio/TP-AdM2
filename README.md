@@ -29,3 +29,9 @@ Después de haber hecho un cambio en el script de python:
 docker-compose build yahoo_trainer
 docker-compose up -d yahoo_trainer
 ```
+
+## Pendientes
+
+* Automatizar flujos de trabajo con Airflor
+
+* Crear una API del modelo con Flask 
