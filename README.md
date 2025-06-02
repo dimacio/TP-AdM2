@@ -1,3 +1,9 @@
+## Integrantes
+
+* a1721 Dimas Ignacio Torres (dimaciodimacio@gmail.com)
+* a1726	Joaquín Matías Mestanza (joa.mestanza@gmail.com)
+* a1714	Ramiro Andrés Feichubuinm (ra.feichu@gmail.com)
+
 ## Como correr el proyecto
 
 Estando en root correr:
