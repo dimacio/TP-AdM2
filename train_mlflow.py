@@ -24,8 +24,8 @@ tf.random.set_seed(42)
 
 # Datos
 # DATA_PATH = './data/yahoo_data.xlsx' # Ruta al archivo de datos local
-DATA_PATH = 'AAPL'
-START_DATE_YFINANCE = '2010-01-01' 
+DATA_PATH = os.getenv("TICKER", "AAPL")
+START_DATE_YFINANCE = os.getenv("START_DATE", "2010-01-01")
 
 # TARGET_COLUMN = 'Close*'
 TARGET_COLUMN = 'Close' # MODIFY THIS: Was 'Close*'
