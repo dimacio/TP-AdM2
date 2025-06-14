@@ -12,7 +12,7 @@ import mlflow.keras
 import os
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Input 
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input # Asegúrate de importar Input
 
 # --- Semillas para que esto sea reproducible ---
 np.random.seed(42)
@@ -21,9 +21,16 @@ tf.random.set_seed(42)
 # --- Parámetros que voy a querer cambiar para experimentar ---
 
 # Datos
-DATA_PATH = './data/yahoo_data.xlsx' # Ruta al archivo de datos local
-TARGET_COLUMN = 'Close*'
-FEATURES_COLUMNS = ['Open', 'High', 'Low', 'Adj Close**', 'Volume']
+# DATA_PATH = './data/yahoo_data.xlsx' # Ruta al archivo de datos local
+DATA_PATH = os.getenv("TICKER", "AAPL")
+START_DATE_YFINANCE = os.getenv("START_DATE", "2010-01-01")
+
+# TARGET_COLUMN = 'Close*'
+TARGET_COLUMN = 'Close' # MODIFY THIS: Was 'Close*'
+# FEATURES_COLUMNS = ['Open', 'High', 'Low', 'Adj Close**', 'Volume']
+# FEATURES_COLUMNS = ['Open', 'High', 'Low', 'Adj Close', 'Volume'] # MODIFY THIS: Was ['Open', 'High', 'Low', 'Adj Close**', 'Volume']
+FEATURES_COLUMNS = ['Open', 'High', 'Low', 'Volume']
+
 
 # Preprocesamiento y división
 LOOKBACK_WINDOW = 60
@@ -60,15 +67,52 @@ def cargar_y_preprocesar_datos(data_path, features_cols, target_col):
     Devuelve el df original indexado, los datos escalados y los scalers.
     Si no encuentra el archivo, termina la ejecución.
     """
+    # try:
+    #     data = pd.read_excel(data_path)
+    # except FileNotFoundError:
+    #     print(f"Error FATAL: No encontré el archivo de datos en: {data_path}")
+    #     return None, None, None, None
+
+    # The data_path argument is now interpreted as the ticker symbol.
+    # It uses the global START_DATE_YFINANCE for the start date.
     try:
-        data = pd.read_excel(data_path)
-    except FileNotFoundError:
-        print(f"Error FATAL: No encontré el archivo de datos en: {data_path}")
+        ticker_symbol = data_path 
+        end_date = datetime.today().strftime('%Y-%m-%d')
+        print(f"Descargando datos para el ticker '{ticker_symbol}' desde {START_DATE_YFINANCE} hasta {end_date}...")
+        data = yf.download(ticker_symbol, start=START_DATE_YFINANCE, end=end_date, progress=False)
+
+        # --- BEGIN ADDED DEBUG LINE ---
+        if not data.empty:
+            print(f"DEBUG: Columnas Yahoo Finance: {data.columns.tolist()}")
+        # --- END ADDED DEBUG LINE ---
+
+        if data.empty:
+            print(f"Error FATAL: No se pudieron descargar datos para '{ticker_symbol}' o el DataFrame está vacío.")
+            return None, None, None, None
+        print(f"Datos para '{ticker_symbol}' descargados exitosamente. {len(data)} filas.")
+    except Exception as e:
+        print(f"Error FATAL al descargar datos de Yahoo Finance para '{data_path}': {e}")
         return None, None, None, None
 
-    data['Date'] = pd.to_datetime(data['Date'])
-    data = data.sort_values(by='Date')
-    data.set_index('Date', inplace=True)
+
+    # Original lines for date processing (commented out or removed):
+    # data['Date'] = pd.to_datetime(data['Date'])
+    # data = data.sort_values(by='Date')
+    # data.set_index('Date', inplace=True)
+
+    # New handling for yfinance data:
+    # yfinance data usually has Date as index. Ensure it's a DatetimeIndex and sorted.
+    if not isinstance(data.index, pd.DatetimeIndex):
+        # This case might occur if 'Date' is a column instead of the index
+        if 'Date' in data.columns:
+            data['Date'] = pd.to_datetime(data['Date'])
+            data.set_index('Date', inplace=True)
+        else: # If 'Date' is not a column and not the index, data is not as expected
+            print(f"Error FATAL: DataFrame para '{data_path}' no tiene un índice de fecha (DatetimeIndex) ni una columna 'Date'.")
+            return None, None, None, None
+    
+    # Ensure data is sorted by index (date)
+    data.sort_index(inplace=True)
 
     all_cols_needed = features_cols + [target_col]
     data_subset = data[all_cols_needed].copy()
