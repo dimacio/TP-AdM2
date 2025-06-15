@@ -1,0 +1,11 @@
+# Usa la imagen oficial de Airflow como base
+FROM apache/airflow:2.9.2
+
+# Instala git para que MLflow no muestre warnings de versionado
+USER root
+RUN apt-get update && apt-get install -y git && apt-get clean
+USER airflow
+
+# Copia tu archivo de requerimientos y lo instala dentro del entorno de Airflow
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
