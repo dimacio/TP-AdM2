@@ -26,6 +26,7 @@ docker-compose up --build
 - MLFlow: http://localhost:5001
 - MinIO (Bucket): http://localhost:9001
 - Airflow API Docs: http://localhost:8080/api/v1/ui/
+- FastAPI: http://localhost:8000
 
 ### Comandos útiles para entrenamiento
 

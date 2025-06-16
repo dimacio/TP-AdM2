@@ -9,6 +9,10 @@ class StockInput(BaseModel):
     low: float
     volume: float
 
+@app.get("/")
+def health_check():
+    return {"status": "ok"}
+
 @app.post("/predict")
 def predict(data: StockInput):
     return {"prediction": 42}  # Dummy response for testing

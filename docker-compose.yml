@@ -160,3 +160,18 @@ services:
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MLFLOW_S3_ENDPOINT_URL: 'http://s3:9000'
     command: bash -c "exec /entrypoint scheduler" # <-- CAMBIO CLAVE
+
+# --- Infraestructura FastAPI ---
+  api:
+    build:
+      context: ./api
+      dockerfile: ../dockerfiles/Dockerfile.fastapi
+    image: stock_predictor_api
+    container_name: stock_predictor_api
+    restart: always
+    ports:
+      - "8000:8000"
+    networks:
+      - ml_pipeline_net
+    # environment:
+      # Add environment variables if needed
