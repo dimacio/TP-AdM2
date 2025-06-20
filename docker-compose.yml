@@ -186,3 +186,18 @@ services:
       - "6379:6379"
     networks:
       - ml_pipeline_net
+  streamlit:
+    build:
+      context: .
+      dockerfile: ./dockerfiles/Dockerfile.streamlit
+    image: stock_predictor_streamlit
+    container_name: stock_predictor_streamlit
+    restart: always
+    ports:
+      - "8501:8501"
+    networks:
+      - ml_pipeline_net
+    environment:
+      FASTAPI_URL: "http://api:8000"
+    depends_on:
+      - api

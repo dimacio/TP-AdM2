@@ -13,7 +13,9 @@ from datetime import datetime
 from mlflow.tracking import MlflowClient
 import yfinance as yf
 import logging
+from schemas import PredictInput, DagRunInput
 logging.basicConfig(level=logging.INFO)
+
 
 redis_client = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
 
@@ -25,23 +27,6 @@ app = FastAPI()
 SECRET_KEY = "your-very-secret-key"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
-class LoginInput(BaseModel):
-    username: str
-    password: str
-
-
-class StockInput(BaseModel):
-    open: float
-    high: float
-    low: float
-    volume: float
-
-class DagRunInput(BaseModel):
-    dag_id: str
-
-# ...existing code...
-
 
 
 def get_best_run_id(experiment_name: str, metric: str = "rmse", ascending: bool = True) -> str:
@@ -155,7 +140,7 @@ def get_best_model_run_id(
 
 
 @app.post("/predict")
-def predict_today_open():
+def predict_today_open(input: PredictInput):
     run_id = get_best_run_id("Stock_Prediction_Training_TaskFlow", metric="rmse", ascending=True)
     logging.info(f"Using run_id: {run_id} for prediction")
 
@@ -174,22 +159,25 @@ def predict_today_open():
     with open(scaler_path, "rb") as f:
         scaler = pickle.load(f)
 
-    # 2. Get last 60 days of 'Open' prices
-    ticker = "NVDA"  # O puedes pasarlo como parámetro
-    end_date = datetime.today().strftime('%Y-%m-%d')
-    start_date = (datetime.today() - timedelta(days=90)).strftime('%Y-%m-%d')  # 90 días para asegurar 60 hábiles
-    df = yf.download(ticker, start=start_date, end=end_date, progress=False)
+    # Get last 60 days of 'Open' prices before the given date
+    target_date = datetime.strptime(input.date, '%Y-%m-%d')
+
+    end_date = target_date.strftime('%Y-%m-%d')
+    start_date = (target_date - timedelta(days=90)).strftime('%Y-%m-%d')  # 90 days to ensure 60 trading days
+    df = yf.download(input.ticker, start=start_date, end=end_date, progress=False)
     last_60_open = df['Open'].dropna().values[-60:]
 
     if len(last_60_open) < 60:
         raise HTTPException(status_code=400, detail="No hay suficientes datos para predecir.")
 
-    # 3. Escalar y preparar input
     features_scaled = scaler.transform(last_60_open.reshape(-1, 1))
     X_pred = features_scaled.reshape(1, 60, 1)
 
-    # 4. Predecir
     pred_scaled = model.predict(X_pred)
     pred = scaler.inverse_transform(pred_scaled)[0][0]
 
-    return {"prediction": float(pred)}
+    return {
+        "ticker": input.ticker,
+        "date": input.date,
+        "prediction": float(pred)
+    }
