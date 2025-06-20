@@ -89,4 +89,5 @@ graph TD
 - Manejo de dependencias. Actualmente las dependencias no tienen versión fija, por lo cual siempre consiguen el `latest` que sea compatible con las otras que ya poseemos. Esto no es ideal ya que podría llegar a romper el proyecto.
 
 - Crear usuarios con roles separados para automatizaciones.
-- Cambiar credenciales de usuario admin por defecto
+- Cambiar credenciales de usuario admin por defecto.
+- Utilizar Redis para servir los datos de Yahoo Finance (esto sirve tanto para los entrenamientos como para los usuarios).
