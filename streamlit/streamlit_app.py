@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 API_URL = os.getenv("FASTAPI_URL", "http://localhost:8000")
 
-st.title("Predicción de apertura NVDA")
+# st.title("Predicción de apertura NVDA")
 
 # Predicción automática al cargar la página
 # @st.cache_data
@@ -27,7 +27,7 @@ st.title("Predicción de apertura NVDA")
 #     st.error(pred)
 
 # # Descargar y graficar últimos 60 días de NVDA
-@st.cache_data
+# @st.cache_data
 def get_nvda_data():
     ticker_symbol = "NVDA"
     ticker = yf.Ticker(ticker_symbol)
@@ -39,8 +39,9 @@ def get_nvda_data():
 
 
 df = get_nvda_data()
-st.subheader("Precio de apertura (Open) de NVDA - Últimos 60 días")
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=df.index, y=df["Open"], mode="lines+markers", name="Apertura"))
-fig.update_layout(xaxis_title="Fecha", yaxis_title="Precio de apertura (USD)")
-st.plotly_chart(fig, use_container_width=True)
+print(df.columns)
+# st.subheader("Precio de apertura (Open) de NVDA - Últimos 60 días")
+# fig = go.Figure()
+# fig.add_trace(go.Scatter(x=df.index, y=df["Open"], mode="lines+markers", name="Apertura"))
+# fig.update_layout(xaxis_title="Fecha", yaxis_title="Precio de apertura (USD)")
+# st.plotly_chart(fig, use_container_width=True)

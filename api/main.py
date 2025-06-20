@@ -12,8 +12,9 @@ import redis
 from datetime import datetime
 from mlflow.tracking import MlflowClient
 import yfinance as yf
+from typing import Literal
 import logging
-from schemas import PredictInput, DagRunInput
+from schemas import MetricType, PredictInput, DagRunInput, StockColumn
 logging.basicConfig(level=logging.INFO)
 
 
@@ -28,15 +29,36 @@ SECRET_KEY = "your-very-secret-key"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
+N_SAMPLES=60
+
+def load_model_and_scaler(run_id: str):
+    """
+    Carga el modelo y el scaler desde MLflow usando el run_id.
+    :param run_id: ID del run de MLflow.
+    :return: modelo y scaler cargados.
+    """
+    mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI'))
+    model_uri = f"runs:/{run_id}/model"
+    model = mlflow.keras.load_model(model_uri)
+
+    client = MlflowClient()
+    local_path = client.download_artifacts(run_id, "scaler_artifact")
+    scaler_path = os.path.join(local_path, "scaler.pkl")
+    
+    with open(scaler_path, "rb") as f:
+        scaler = pickle.load(f)
+
+    return model, scaler
+
 
 def get_best_run_id(experiment_name: str, metric: str = "rmse", ascending: bool = True) -> str:
     """
-    Busca el run_id del mejor modelo según la métrica especificada.
+    Busca el parent_training_run_id del mejor modelo según la métrica especificada.
     :param experiment_name: Nombre del experimento en MLflow.
     :param metric: Nombre de la métrica (por ejemplo, 'rmse', 'r2').
     :param ascending: True para minimizar la métrica (ej: rmse), False para maximizar (ej: r2).
-    :return: run_id del mejor modelo.
-    """
+    :return: parent_training_run_id del mejor modelo.
+    """ 
     mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI'))
     client = MlflowClient()
     experiment = client.get_experiment_by_name(experiment_name)
@@ -49,11 +71,22 @@ def get_best_run_id(experiment_name: str, metric: str = "rmse", ascending: bool 
     )
     if not runs:
         raise ValueError(f"No runs found for experiment '{experiment_name}'.")
-    return runs[0].info.run_id
+    parent_run_id = runs[0].data.params.get("parent_training_run_id")
+    if not parent_run_id:
+        raise ValueError(f"parent_training_run_id not found in best run for experiment '{experiment_name}'.")
+    return parent_run_id
 
-# Ejemplo de uso:
-# best_run_id = get_best_run_id("Stock_Prediction_Evaluation_TaskFlow", metric="rmse", ascending=True)
+def get_last_n_ticker_prices(ticker: str, input_end_date: str, column: StockColumn, n: int = 60):    
+    target_date = datetime.strptime(input_end_date, '%Y-%m-%d')
+    end_date = target_date.strftime('%Y-%m-%d')
+    start_date = (target_date - timedelta(days=int(n*1.5))).strftime('%Y-%m-%d')  # 90 days to ensure 60 trading days
+    df = yf.download(ticker, start=start_date, end=end_date, progress=False)
+    last_n_ticker = df[column].dropna().values[-n:]
 
+    if len(last_n_ticker) < n:
+        raise HTTPException(status_code=400, detail="No hay suficientes datos para predecir.")
+
+    return last_n_ticker
 
 
 @app.get("/")
@@ -129,7 +162,7 @@ def trigger_new_dag_run(
 @app.get("/get-best-model-run-id")
 def get_best_model_run_id(
     experiment_name: str = "Stock_Prediction_Evaluation_TaskFlow",
-    metric: str = "rmse",
+    metric: MetricType = "rmse",
     ascending: bool = True
 ):
     try:
@@ -139,9 +172,9 @@ def get_best_model_run_id(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.post("/predict")
-def predict_today_open(input: PredictInput):
-    run_id = get_best_run_id("Stock_Prediction_Training_TaskFlow", metric="rmse", ascending=True)
+@app.post("/predict-sample")
+def predict_sample(input: PredictInput):
+    run_id = get_best_run_id("Stock_Prediction_Evaluation_TaskFlow", metric=input.metric, ascending=True)
     logging.info(f"Using run_id: {run_id} for prediction")
 
     client = MlflowClient()
@@ -149,29 +182,13 @@ def predict_today_open(input: PredictInput):
     logging.info(f"Artifacts for run {run_id}: {[a.path for a in artifacts]}")
 
     # 1. Load model and scaler
-    mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI'))
-    model_uri = f"runs:/{run_id}/model"
-    model = mlflow.keras.load_model(model_uri)
-
-    # client = MlflowClient()
-    local_path = client.download_artifacts(run_id, "scaler_artifact")
-    scaler_path = os.path.join(local_path, "scaler.pkl")
-    with open(scaler_path, "rb") as f:
-        scaler = pickle.load(f)
+    model, scaler = load_model_and_scaler(run_id)
 
     # Get last 60 days of 'Open' prices before the given date
-    target_date = datetime.strptime(input.date, '%Y-%m-%d')
+    last_n_samples_open = get_last_n_ticker_prices(input.ticker, input.date, 'Open', N_SAMPLES)
 
-    end_date = target_date.strftime('%Y-%m-%d')
-    start_date = (target_date - timedelta(days=90)).strftime('%Y-%m-%d')  # 90 days to ensure 60 trading days
-    df = yf.download(input.ticker, start=start_date, end=end_date, progress=False)
-    last_60_open = df['Open'].dropna().values[-60:]
-
-    if len(last_60_open) < 60:
-        raise HTTPException(status_code=400, detail="No hay suficientes datos para predecir.")
-
-    features_scaled = scaler.transform(last_60_open.reshape(-1, 1))
-    X_pred = features_scaled.reshape(1, 60, 1)
+    features_scaled = scaler.transform(last_n_samples_open.reshape(-1, 1))
+    X_pred = features_scaled.reshape(1, N_SAMPLES, 1)
 
     pred_scaled = model.predict(X_pred)
     pred = scaler.inverse_transform(pred_scaled)[0][0]
