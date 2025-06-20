@@ -88,10 +88,9 @@ def trigger_new_dag_run(
 def get_best_model_run_id(
     experiment_name: str = "Stock_Prediction_Evaluation_TaskFlow",
     metric: MetricType = "rmse",
-    ascending: bool = True
 ):
     try:
-        run_id = get_best_run_id(experiment_name, metric, ascending)
+        run_id = get_best_run_id(experiment_name, metric)
         return {"run_id": run_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -99,7 +98,7 @@ def get_best_model_run_id(
 
 @app.post("/predict-sample")
 def predict_sample(input: PredictInput):
-    run_id = get_best_run_id("Stock_Prediction_Evaluation_TaskFlow", metric=input.metric, ascending=True)
+    run_id = get_best_run_id("Stock_Prediction_Evaluation_TaskFlow", metric=input.metric)
     logging.info(f"Using run_id: {run_id} for prediction")
 
     client = MlflowClient()

@@ -1,17 +1,17 @@
-# Use official Python image
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
 # Copy requirements and install
-COPY requirements.txt .
+COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy rest of the app
-COPY . .
+# Copy the rest of the app
+COPY . /app
 
-# Expose port
+# Set PYTHONPATH so 'api' is importable
+ENV PYTHONPATH=/app
+
 EXPOSE 8000
 
 # Run FastAPI with Uvicorn

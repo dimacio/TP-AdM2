@@ -2,6 +2,7 @@ import mlflow.keras
 import os
 import pickle
 from mlflow.tracking import MlflowClient
+from schemas import MetricType
 
 def load_model_and_scaler(run_id: str):
     """
@@ -23,7 +24,7 @@ def load_model_and_scaler(run_id: str):
     return model, scaler
 
 
-def get_best_run_id(experiment_name: str, metric: str = "rmse", ascending: bool = True) -> str:
+def get_best_run_id(experiment_name: str, metric: MetricType) -> str:
     """
     Busca el parent_training_run_id del mejor modelo según la métrica especificada.
     :param experiment_name: Nombre del experimento en MLflow.
@@ -31,6 +32,9 @@ def get_best_run_id(experiment_name: str, metric: str = "rmse", ascending: bool 
     :param ascending: True para minimizar la métrica (ej: rmse), False para maximizar (ej: r2).
     :return: parent_training_run_id del mejor modelo.
     """ 
+
+    ascending = metric in ["rmse", "mae", "mse"]
+
     mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI'))
     client = MlflowClient()
     experiment = client.get_experiment_by_name(experiment_name)
