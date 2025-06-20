@@ -1,9 +1,8 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends
 import requests
-import jwt
 from services.mlflow_service import load_model_and_scaler, get_best_run_id
+from services.auth_service import create_access_token, verify_jwt_token
 from datetime import datetime, timedelta
-from fastapi import Depends, Header
 import redis
 from datetime import datetime
 from mlflow.tracking import MlflowClient
@@ -19,10 +18,6 @@ redis_client = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
 airflow_api_host = "http://airflow-webserver:8080"
 
 app = FastAPI()
-
-SECRET_KEY = "your-very-secret-key"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 N_SAMPLES=60
 
@@ -43,27 +38,6 @@ def get_last_n_ticker_prices(ticker: str, input_end_date: str, column: StockColu
 @app.get("/")
 def health_check():
     return {"status": "ok"}
-
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-def verify_jwt_token(token: str = Header(...)):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        if username is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        # Optionally check Redis for token revocation
-        return username
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
 
 @app.post("/login")
 def login(username: str, password: str):
