@@ -53,7 +53,6 @@ El proyecto utiliza Docker Compose para orquestar los siguientes servicios:
 ```mermaid
 graph TD
     Usuario --> Streamlit
-    GithubAction-.->FastAPI
     Streamlit --> FastAPI
     FastAPI --> MLflow
     FastAPI --> MinIO
