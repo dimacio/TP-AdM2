@@ -3,3 +3,8 @@ uvicorn
 requests
 PyJWT
 redis
+mlflow
+numpy
+yfinance
+tensorflow
+boto3
