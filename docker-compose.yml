@@ -179,6 +179,7 @@ services:
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MLFLOW_S3_ENDPOINT_URL: 'http://s3:9000'
+      PYTHONPATH: /app
   redis:
     image: redis:7
     container_name: redis
@@ -186,3 +187,18 @@ services:
       - "6379:6379"
     networks:
       - ml_pipeline_net
+  streamlit:
+    build:
+      context: .
+      dockerfile: ./dockerfiles/Dockerfile.streamlit
+    image: stock_predictor_streamlit
+    container_name: stock_predictor_streamlit
+    restart: always
+    ports:
+      - "8501:8501"
+    networks:
+      - ml_pipeline_net
+    environment:
+      FASTAPI_URL: "http://api:8000"
+    depends_on:
+      - api
