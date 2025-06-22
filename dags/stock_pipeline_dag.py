@@ -13,7 +13,8 @@ from sklearn.metrics import mean_squared_error, r2_score
 import pickle
 import logging
 
-from airflow.decorators import dag, task
+from airflow.decorators import dag, task, params
+
 
 # Configuración de MLflow (leída desde las variables de entorno de Airflow)
 os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv('MLFLOW_S3_ENDPOINT_URL')
@@ -31,6 +32,7 @@ EVALUATION_EXPERIMENT_NAME = "Stock_Prediction_Evaluation_TaskFlow"
     catchup=False,
     schedule=None,
     tags=["ml", "taskflow", "stocks"],
+    params={"ticker": "NVDA"} # <-- AÑADIDO: Parámetro por defecto
 )
 def stock_prediction_pipeline():
 
@@ -146,7 +148,10 @@ def stock_prediction_pipeline():
 
         logging.info("--- Evaluación completada. ---")
 
-    training_run_id_value = train_model(ticker=TICKER, experiment_name=TRAINING_EXPERIMENT_NAME)
-    evaluate_model(training_run_id=training_run_id_value, ticker=TICKER, eval_experiment_name=EVALUATION_EXPERIMENT_NAME)
+    # EXTRAER el ticker de la configuración del DAG
+    ticker_param = "{{ params.ticker }}" 
+
+    training_run_id_value = train_model(ticker=ticker_param, experiment_name=TRAINING_EXPERIMENT_NAME)
+    evaluate_model(training_run_id=training_run_id_value, ticker=ticker_param, eval_experiment_name=EVALUATION_EXPERIMENT_NAME)
 
 stock_prediction_pipeline()

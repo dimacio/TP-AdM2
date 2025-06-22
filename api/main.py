@@ -67,7 +67,11 @@ def trigger_new_dag_run(
         raise HTTPException(status_code=401, detail="Session expired, please log in again.")
     
     url = f"{airflow_api_host}/api/v1/dags/{data.dag_id}/dagRuns"
-    payload = {}
+    payload = {
+         "conf": {
+            "ticker": data.ticker
+        }
+    }
 
     try:
         resp = requests.post(url, json=payload, auth=(username, password))

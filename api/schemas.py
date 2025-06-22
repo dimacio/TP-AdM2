@@ -30,3 +30,4 @@ class StockInput(BaseModel):
 
 class DagRunInput(BaseModel):
     dag_id: str = 'taskflow_stock_prediction_pipeline'
+    ticker: str = "NVDA"
