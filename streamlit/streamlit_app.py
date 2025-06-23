@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 API_URL = os.getenv("FASTAPI_URL", "http://localhost:8000")
 
-# --- Modelos de Datos (copiado de schemas.py para claridad) ---
+# --- Modelos de Datos ---
 class MetricType(str, Enum):
     RMSE = "rmse"
     MAE = "mae"
@@ -41,9 +41,6 @@ def show_login_page():
                     
                     st.session_state['token'] = response.json()['access_token']
                     st.session_state['logged_in'] = True
-                    st.success("¡Login exitoso! Redirigiendo...")
-                    
-                    # CAMBIO: Usar la función moderna st.rerun()
                     st.rerun()
 
                 except requests.exceptions.HTTPError as e:
@@ -71,9 +68,14 @@ def show_main_app():
             with st.spinner("Obteniendo predicción..."):
                 response = requests.post(predict_url, json=payload, headers=headers, timeout=30)
             
-            if response.status_code == 404 and "Experiment" in response.text and "not found" in response.text:
-                st.error("No se encontraron modelos entrenados.")
-                st.warning("Por favor, entrena un nuevo modelo usando la sección 2.")
+            # --- CORRECCIÓN CLAVE: Mejor manejo de errores ---
+            if response.status_code == 404:
+                error_detail = response.json().get("detail", "")
+                if "No se encontraron runs para el ticker" in error_detail:
+                    st.error(f"No se encontró un modelo entrenado para el ticker '{pred_ticker}'.")
+                    st.warning("Por favor, entrena un nuevo modelo para este activo usando la sección 2.")
+                else:
+                    st.error(f"Error 404: {error_detail}")
             else:
                 response.raise_for_status()
                 prediction = response.json()

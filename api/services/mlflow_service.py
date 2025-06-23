@@ -33,7 +33,6 @@ def load_model_and_scaler(run_id: str):
     logging.info("Modelo cargado exitosamente.")
     
     # 2. Cargar el scaler
-    # CORRECCIÓN: Usar el nombre de artefacto correcto definido en el DAG.
     local_dir = client.download_artifacts(run_id, "scaler_artifact")
     scaler_path = os.path.join(local_dir, "scaler.pkl")
 
@@ -44,9 +43,10 @@ def load_model_and_scaler(run_id: str):
     return model, scaler
 
 
-def get_best_run_id(experiment_name: str, metric: str = "rmse"):
+def get_best_run_id(experiment_name: str, ticker: str, metric: str = "rmse"):
     """
-    Obtiene el run ID del mejor modelo del experimento de EVALUACIÓN.
+    Obtiene el run ID del mejor modelo para un TICKER específico
+    del experimento de EVALUACIÓN.
     """
     client = MlflowClient()
     try:
@@ -54,15 +54,20 @@ def get_best_run_id(experiment_name: str, metric: str = "rmse"):
         if experiment is None:
             raise ValueError(f"El experimento '{experiment_name}' no fue encontrado en MLflow.")
 
+        # --- CORRECCIÓN CLAVE: Filtrar por ticker ---
+        # Buscamos runs que tengan un parámetro llamado 'ticker' con el valor solicitado.
+        filter_string = f"params.ticker = '{ticker}'"
+        
         runs = client.search_runs(
             experiment_ids=[experiment.experiment_id],
+            filter_string=filter_string, # Añadir el filtro
             order_by=[f"metrics.{metric} ASC"]
         )
         
         if not runs:
-            raise ValueError(f"No se encontraron runs en el experimento '{experiment_name}'.")
+            # Mensaje de error más específico si no hay modelo para ese ticker.
+            raise ValueError(f"No se encontraron runs para el ticker '{ticker}' en el experimento '{experiment_name}'. ¿Ya entrenaste un modelo para este activo?")
 
         return runs[0].info.run_id
     except MlflowException as e:
         raise ValueError(f"Ocurrió un error buscando runs en MLflow: {e}")
-

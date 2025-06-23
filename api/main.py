@@ -11,7 +11,7 @@ import redis
 import yfinance as yf
 import logging
 import numpy as np
-from schemas import MetricType, PredictInput, DagRunInput, StockColumn
+from schemas import MetricType, PredictInput, DagRunInput
 
 # Configuración de logging para ver todo
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -31,10 +31,11 @@ def get_last_n_ticker_prices(ticker: str, input_end_date: str, column: str, n: i
     start_date = (target_date - timedelta(days=int(n*2.0))).strftime('%Y-%m-%d')
     df = yf.download(ticker, start=start_date, end=end_date, progress=False)
     
+    log.info(f"Columnas descargadas de yfinance: {df.columns.to_list()}")
+    
     if df.empty:
         raise HTTPException(status_code=404, detail=f"No se encontraron datos para el ticker {ticker}.")
     
-    # Este es el punto exacto del error anterior
     last_n_ticker = df[column].dropna().tail(n).values
     
     if len(last_n_ticker) < n:
@@ -42,13 +43,13 @@ def get_last_n_ticker_prices(ticker: str, input_end_date: str, column: str, n: i
     return last_n_ticker
 
 # --- Endpoints de la API ---
+# (Las funciones de health_check, login y trigger_new_dag_run no cambian)
 @app.get("/")
 def health_check():
     return {"status": "ok"}
 
 @app.post("/login")
 def login(username: str = Form(), password: str = Form()):
-    # (sin cambios)
     url = f"{airflow_api_host}/api/v1/dags"
     try:
         resp = requests.get(url, auth=(username, password), timeout=10)
@@ -62,7 +63,6 @@ def login(username: str = Form(), password: str = Form()):
 
 @app.post("/trigger-new-dag-run")
 def trigger_new_dag_run(data: DagRunInput, username: str = Depends(verify_jwt_token)):
-    # (sin cambios)
     password = redis_client.get(f"airflow:{username}:password")
     if not password:
         raise HTTPException(status_code=401, detail="Sesión expirada. Por favor, vuelve a iniciar sesión.")
@@ -79,15 +79,21 @@ def trigger_new_dag_run(data: DagRunInput, username: str = Depends(verify_jwt_to
 def predict_sample(input: PredictInput, username: str = Depends(verify_jwt_token)):
     try:
         log.info(f"Buscando el mejor run en el experimento de evaluación: Stock_Prediction_Evaluation_TaskFlow")
-        eval_run_id = get_best_run_id("Stock_Prediction_Evaluation_TaskFlow", metric=input.metric)
         
-        log.info(f"Mejor run de evaluación encontrado: {eval_run_id}. Buscando su run de entrenamiento padre...")
+        # --- CORRECCIÓN CLAVE: Pasar el ticker a la función de búsqueda ---
+        eval_run_id = get_best_run_id(
+            "Stock_Prediction_Evaluation_TaskFlow", 
+            ticker=input.ticker, 
+            metric=input.metric
+        )
+        
+        log.info(f"Mejor run de evaluación encontrado para {input.ticker}: {eval_run_id}. Buscando su run de entrenamiento padre...")
         training_run_id = get_training_run_id_from_eval_run(eval_run_id)
         
         model, scaler = load_model_and_scaler(training_run_id)
         
-        column_to_fetch = StockColumn.OPEN.value
-        log.info(f"Llamando a get_last_n_ticker_prices con la columna: '{column_to_fetch}' (Tipo: {type(column_to_fetch)})")
+        column_to_fetch = "Open"
+        log.info(f"Llamando a get_last_n_ticker_prices con la columna: '{column_to_fetch}'")
         
         last_n_samples_open = get_last_n_ticker_prices(input.ticker, input.date, column_to_fetch)
         
@@ -101,6 +107,7 @@ def predict_sample(input: PredictInput, username: str = Depends(verify_jwt_token
         return {"ticker": input.ticker, "date": input.date, "prediction": float(pred)}
 
     except ValueError as e:
+        # Este error ahora se activará si no hay modelo para el ticker
         log.error(f"Error de valor durante la predicción: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
