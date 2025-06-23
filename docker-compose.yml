@@ -9,8 +9,6 @@ volumes:
   postgres_mlflow_data:
   minio_data:
   postgres_airflow_data:
-  dags_data:
-  logs_data:
 
 services:
   # --- Infraestructura MLflow ---
@@ -22,9 +20,9 @@ services:
     networks:
       - ml_pipeline_net
     environment:
-      POSTGRES_USER: ${PG_USER:-mlflow}
-      POSTGRES_PASSWORD: ${PG_PASSWORD:-mlflow}
-      POSTGRES_DB: ${PG_DATABASE:-mlflow}
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${PG_DATABASE}
     volumes:
       - postgres_mlflow_data:/var/lib/postgresql/data
 
@@ -39,8 +37,8 @@ services:
     networks:
       - ml_pipeline_net
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
@@ -51,15 +49,18 @@ services:
     depends_on: [s3]
     networks:
       - ml_pipeline_net
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MLFLOW_BUCKET_NAME: ${MLFLOW_BUCKET_NAME}
     entrypoint: >
       /bin/sh -c '
-        until mc alias set s3alias http://s3:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin}; do sleep 2; done;
-        BUCKET_NAME=$${MLFLOW_BUCKET_NAME:-mi-bucket-experimentos};
-        if ! mc ls "s3alias/$${BUCKET_NAME}" > /dev/null 2>&1; then
-          mc mb "s3alias/$${BUCKET_NAME}";
-          mc policy set public "s3alias/$${BUCKET_NAME}";
+        until mc alias set s3alias http://s3:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD; do echo "waiting for s3..."; sleep 2; done;
+        if ! mc ls "s3alias/$$MLFLOW_BUCKET_NAME" > /dev/null 2>&1; then
+          mc mb "s3alias/$$MLFLOW_BUCKET_NAME";
+          mc policy set public "s3alias/$$MLFLOW_BUCKET_NAME";
         else
-          echo "Bucket $${BUCKET_NAME} already exists.";
+          echo "Bucket $$MLFLOW_BUCKET_NAME already exists.";
         fi;
       '
   
@@ -76,13 +77,13 @@ services:
     networks:
       - ml_pipeline_net
     environment:
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       MLFLOW_S3_ENDPOINT_URL: http://s3:9000
     command: >
       mlflow server
-      --backend-store-uri postgresql://${PG_USER:-mlflow}:${PG_PASSWORD:-mlflow}@postgres_mlflow:5432/${PG_DATABASE:-mlflow}
-      --default-artifact-root s3://${MLFLOW_BUCKET_NAME:-mlflow-bucket}/
+      --backend-store-uri postgresql://${PG_USER}:${PG_PASSWORD}@postgres_mlflow:5432/${PG_DATABASE}
+      --default-artifact-root s3://${MLFLOW_BUCKET_NAME}/
       --host 0.0.0.0
       --port 5000
 
@@ -95,9 +96,9 @@ services:
     networks:
       - ml_pipeline_net
     environment:
-      POSTGRES_USER: ${AIRFLOW_DB_USER:-airflow}
-      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
-      POSTGRES_DB: ${AIRFLOW_DB_NAME:-airflow}
+      POSTGRES_USER: ${AIRFLOW_DB_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME}
     volumes:
       - postgres_airflow_data:/var/lib/postgresql/data
 
@@ -112,7 +113,7 @@ services:
       - ml_pipeline_net
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@postgres_airflow:5432/${AIRFLOW_DB_NAME:-airflow}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres_airflow:5432/${AIRFLOW_DB_NAME}
     entrypoint: /bin/bash
     command: -c 'airflow db init && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com'
 
@@ -131,14 +132,14 @@ services:
       - ./dags:/opt/airflow/dags
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@postgres_airflow:5432/${AIRFLOW_DB_NAME:-airflow}
-      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-a_truly_secret_key}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres_airflow:5432/${AIRFLOW_DB_NAME}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
       AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
       MLFLOW_TRACKING_URI: 'http://mlflow:5000'
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       MLFLOW_S3_ENDPOINT_URL: 'http://s3:9000'
-    command: bash -c "exec /entrypoint webserver" # <-- CAMBIO CLAVE
+    command: webserver
 
   airflow-scheduler:
     build:
@@ -154,15 +155,22 @@ services:
       - ./dags:/opt/airflow/dags
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@postgres_airflow:5432/${AIRFLOW_DB_NAME:-airflow}
-      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-a_truly_secret_key}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres_airflow:5432/${AIRFLOW_DB_NAME}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
       MLFLOW_TRACKING_URI: 'http://mlflow:5000'
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       MLFLOW_S3_ENDPOINT_URL: 'http://s3:9000'
-    command: bash -c "exec /entrypoint scheduler" # <-- CAMBIO CLAVE
+    command: scheduler
 
-# --- Infraestructura FastAPI ---
+  # --- Infraestructura FastAPI y Streamlit ---
+  redis:
+    image: redis:7
+    container_name: redis
+    ports: ["6379:6379"]
+    networks:
+      - ml_pipeline_net
+
   api:
     build:
       context: ./api
@@ -170,23 +178,22 @@ services:
     image: stock_predictor_api
     container_name: stock_predictor_api
     restart: always
-    ports:
-      - "8000:8000"
+    ports: ["8000:8000"]
     networks:
       - ml_pipeline_net
+    depends_on:
+      - redis
+      - mlflow
+      - airflow-webserver
     environment:
       MLFLOW_TRACKING_URI: 'http://mlflow:5000'
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      MLFLOW_S3_ENDPOINT_URL: 'http://s3:9000'
       PYTHONPATH: /app
-  redis:
-    image: redis:7
-    container_name: redis
-    ports:
-      - "6379:6379"
-    networks:
-      - ml_pipeline_net
+      # --- CORRECCIÓN FINAL ---
+      # Añadir credenciales para que la API pueda acceder a los artefactos en S3/MinIO
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      MLFLOW_S3_ENDPOINT_URL: 'http://s3:9000'
+
   streamlit:
     build:
       context: .
@@ -194,8 +201,7 @@ services:
     image: stock_predictor_streamlit
     container_name: stock_predictor_streamlit
     restart: always
-    ports:
-      - "8501:8501"
+    ports: ["8501:8501"]
     networks:
       - ml_pipeline_net
     environment:

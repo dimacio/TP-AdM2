@@ -1,112 +1,113 @@
 import streamlit as st
 import requests
 import os
-import yfinance as yf
-import plotly.graph_objs as go
-import pandas as pd
+import logging
+from datetime import datetime
+from enum import Enum
 
-# --- CONFIGURACIÓN ---
+# Configurar logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 API_URL = os.getenv("FASTAPI_URL", "http://localhost:8000")
-st.set_page_config(layout="wide")
 
-# --- ESTADO DE LA SESIÓN ---
-if "jwt_token" not in st.session_state:
-    st.session_state.jwt_token = None
-if "pred_history" not in st.session_state:
-    st.session_state.pred_history = []
+# --- Modelos de Datos (copiado de schemas.py para claridad) ---
+class MetricType(str, Enum):
+    RMSE = "rmse"
+    MAE = "mae"
+    R2 = "r2"
 
-# --- BARRA LATERAL (SIDEBAR) PARA AUTENTICACIÓN ---
-with st.sidebar:
-    st.title("Autenticación")
-    if st.session_state.jwt_token is None:
-        username = st.text_input("Usuario (admin)", key="login_user")
-        password = st.text_input("Contraseña (admin)", type="password", key="login_pass")
-        if st.button("Login", key="login_button"):
-            if not username or not password:
-                st.error("Por favor, ingrese usuario y contraseña.")
-            else:
+# --- Funciones de la App ---
+
+def show_login_page():
+    st.title("Stock Predictor Login")
+    st.info("Usa las credenciales de Airflow (ej: admin/admin)")
+    
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+
+        if submitted:
+            if username and password:
+                login_url = f"{API_URL}/login"
                 try:
-                    response = requests.post(f"{API_URL}/login", data={"username": username, "password": password})
-                    response.raise_for_status()
-                    st.session_state.jwt_token = response.json()["access_token"]
+                    with st.spinner("Iniciando sesión..."):
+                        response = requests.post(
+                            login_url,
+                            data={"username": username, "password": password},
+                            timeout=10
+                        )
+                        response.raise_for_status()
+                    
+                    st.session_state['token'] = response.json()['access_token']
+                    st.session_state['logged_in'] = True
+                    st.success("¡Login exitoso! Redirigiendo...")
+                    
+                    # CAMBIO: Usar la función moderna st.rerun()
                     st.rerun()
-                except requests.HTTPError:
-                    st.error("Error de autenticación: Credenciales incorrectas.")
-                except Exception as e:
-                    st.error(f"Error de conexión: {e}")
-    else:
-        st.success("✅ Conectado")
-        if st.button("Logout", key="logout_button"):
-            st.session_state.jwt_token = None
-            st.rerun()
 
-# --- CONTENIDO PRINCIPAL ---
-st.title("Predicción de apertura de acciones")
-
-ticker = st.text_input("Ticker", value="NVDA", key="ticker_input")
-metric = st.selectbox("Métrica para seleccionar modelo", ["rmse", "mse", "r2"], key="metric_select")
-
-if st.session_state.jwt_token:
-    if st.button(f"Entrenar nuevo modelo para {ticker}", key="train_button"):
-        headers = {"token": st.session_state.jwt_token}
-        payload = {"dag_id": "taskflow_stock_prediction_pipeline", "ticker": ticker}
-        try:
-            response = requests.post(f"{API_URL}/trigger-new-dag-run", json=payload, headers=headers)
-            response.raise_for_status()
-            st.success(f"¡Entrenamiento iniciado para {ticker}!")
-            st.json(response.json())
-        except Exception as e:
-            st.error(f"Error al iniciar el entrenamiento: {e}")
-else:
-    st.warning("Por favor, inicie sesión para entrenar un modelo o ver predicciones.")
-
-# --- LÓGICA DE GRÁFICOS Y PREDICCIONES ---
-@st.cache_data
-def get_ticker_data(ticker_symbol):
-    try:
-        df = yf.Ticker(ticker_symbol).history(period="60d")
-        return df if not df.empty else None
-    except Exception:
-        return None
-
-df_history = get_ticker_data(ticker)
-
-if df_history is not None:
-    st.subheader(f"Precio de apertura (Open) de {ticker} - Últimos 60 días")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_history.index, y=df_history["Open"], mode="lines+markers", name="Apertura Real"))
-
-    # --- SECCIÓN COMPLETADA ---
-    # Solo intentar predecir si el usuario está logueado
-    if st.session_state.jwt_token:
-        headers = {"token": st.session_state.jwt_token}
-        try:
-            # Llamar al endpoint de predicción de la API
-            response = requests.post(f"{API_URL}/predict", json={"ticker": ticker, "metric": metric}, headers=headers)
-            response.raise_for_status()
-            
-            # Procesar y graficar la predicción
-            prediction_data = response.json()
-            pred_value = prediction_data.get("prediction")
-            
-            if pred_value is not None:
-                # Crear una fecha para el siguiente día hábil para la predicción
-                last_date = df_history.index[-1]
-                next_day = last_date + pd.Timedelta(days=1)
-                fig.add_trace(go.Scatter(x=[next_day], y=[pred_value], mode='markers', name='Predicción', marker=dict(color='red', size=10, symbol='star')))
-                st.metric(label=f"Predicción de Apertura para mañana ({ticker})", value=f"${pred_value:,.2f}")
+                except requests.exceptions.HTTPError as e:
+                    st.error(f"Fallo el login: {e.response.status_code} - {e.response.text}")
+                except requests.exceptions.RequestException:
+                    st.error(f"Error de conexión: No se pudo conectar a la API en {login_url}.")
             else:
-                st.warning("La API no devolvió una predicción válida.")
+                st.warning("Por favor, ingresa usuario y contraseña.")
 
-        except requests.HTTPError as e:
-            # Mostrar el error que viene de la API si no encuentra un modelo
-            detail = e.response.json().get("detail", "Error desconocido")
-            st.error(f"No se pudo obtener la predicción: {detail}")
+def show_main_app():
+    st.title("Predicción de Apertura de Acciones")
+
+    # --- Sección de Predicción ---
+    st.header("1. Obtener una Predicción")
+    pred_ticker = st.text_input("Ticker Symbol", "NVDA", key="pred_ticker")
+    pred_date = st.date_input("Fecha de Predicción", datetime.now())
+    pred_metric = st.selectbox("Métrica para seleccionar modelo", [m.value for m in MetricType], key="pred_metric")
+
+    if st.button("Obtener Predicción de Apertura"):
+        predict_url = f"{API_URL}/predict-sample"
+        payload = {"ticker": pred_ticker, "date": pred_date.strftime("%Y-%m-%d"), "metric": pred_metric}
+        headers = {"Authorization": f"Bearer {st.session_state.get('token')}"}
+        
+        try:
+            with st.spinner("Obteniendo predicción..."):
+                response = requests.post(predict_url, json=payload, headers=headers, timeout=30)
+            
+            if response.status_code == 404 and "Experiment" in response.text and "not found" in response.text:
+                st.error("No se encontraron modelos entrenados.")
+                st.warning("Por favor, entrena un nuevo modelo usando la sección 2.")
+            else:
+                response.raise_for_status()
+                prediction = response.json()
+                st.success(f"Precio de apertura predicho para {prediction['ticker']} el {prediction['date']}: ${prediction['prediction']:.2f}")
+
+        except requests.exceptions.HTTPError as e:
+            st.error("No se pudo obtener la predicción. El servidor respondió con un error.")
+            st.json({"url_llamada": e.request.url, "status_code": e.response.status_code, "respuesta_servidor": e.response.json()})
         except Exception as e:
-            st.error(f"Error al conectar con el servicio de predicción: {e}")
-    # --- FIN DE LA SECCIÓN COMPLETADA ---
+            st.error(f"Ocurrió un error durante la predicción: {e}")
 
-    fig.update_layout(xaxis_title="Fecha", yaxis_title="Precio de apertura (USD)")
-    st.plotly_chart(fig, use_container_width=True)
+    # --- Sección de Trigger DAG ---
+    st.header("2. Entrenar un Nuevo Modelo")
+    dag_ticker = st.text_input("Ticker para nuevo entrenamiento", "NVDA", key="dag_ticker")
+    
+    if st.button(f"Entrenar nuevo modelo para {dag_ticker}"):
+        dag_url = f"{API_URL}/trigger-new-dag-run"
+        payload = {"dag_id": "stock_prediction_pipeline", "ticker": dag_ticker}
+        headers = {"Authorization": f"Bearer {st.session_state.get('token')}"}
+
+        try:
+            with st.spinner(f"Iniciando entrenamiento para {dag_ticker}..."):
+                response = requests.post(dag_url, json=payload, headers=headers, timeout=30)
+                response.raise_for_status()
+            st.success("¡Se inició el entrenamiento (DAG run) correctamente! Puedes monitorearlo en la UI de Airflow.")
+            st.json(response.json())
+        except requests.exceptions.HTTPError as e:
+            st.error("Error al iniciar el entrenamiento.")
+            st.json({"url_llamada": e.request.url, "status_code": e.response.status_code, "respuesta_servidor": e.response.json()})
+        except Exception as e:
+            st.error(f"Ocurrió un error al iniciar el entrenamiento: {e}")
+
+# --- Lógica principal ---
+if not st.session_state.get('logged_in', False):
+    show_login_page()
 else:
-    st.error(f"No se pudieron obtener datos para el ticker: {ticker}. Verifique si el ticker es correcto.")
+    show_main_app()

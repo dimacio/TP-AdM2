@@ -9,30 +9,26 @@ import mlflow.keras
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 import pickle
 import logging
 
-from airflow.decorators import dag, task, params
-
-
-# Configuración de MLflow (leída desde las variables de entorno de Airflow)
-os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv('MLFLOW_S3_ENDPOINT_URL')
-os.environ['AWS_ACCESS_KEY_ID'] = os.getenv('AWS_ACCESS_KEY_ID')
-os.environ['AWS_SECRET_ACCESS_KEY'] = os.getenv('AWS_SECRET_ACCESS_KEY')
+from airflow.decorators import dag, task
 
 # Constantes del Pipeline
-TICKER = "NVDA"
-TRAINING_EXPERIMENT_NAME = "Stock_Prediction_Training_TaskFlow"
+TRAINING_EXPERIMENT_NAME = "Stock_Prediction_Training"
+# CORRECCIÓN: Asegurar que el nombre del experimento de evaluación coincida con el que busca la API
 EVALUATION_EXPERIMENT_NAME = "Stock_Prediction_Evaluation_TaskFlow"
 
 @dag(
-    dag_id="taskflow_stock_prediction_pipeline",
-    start_date=pendulum.datetime(2025, 6, 15, tz="UTC"),
+    # CORRECCIÓN: El ID del DAG debe coincidir con el que la API llama
+    dag_id="stock_prediction_pipeline",
+    start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
     catchup=False,
     schedule=None,
     tags=["ml", "taskflow", "stocks"],
-    params={"ticker": "NVDA"} # <-- AÑADIDO: Parámetro por defecto
+    params={"ticker": "NVDA"},
+    is_paused_upon_creation=False
 )
 def stock_prediction_pipeline():
 
@@ -47,7 +43,7 @@ def stock_prediction_pipeline():
         
         with mlflow.start_run() as run:
             run_id = run.info.run_id
-            logging.info(f"--- Iniciando Tarea de Entrenamiento --- Run ID: {run_id}")
+            logging.info(f"--- Iniciando Tarea de Entrenamiento para {ticker} --- Run ID: {run_id}")
             
             start_date = "2010-01-01"
             end_date = datetime.today().strftime('%Y-%m-%d')
@@ -56,7 +52,7 @@ def stock_prediction_pipeline():
             if data.empty: raise ValueError(f"No se pudieron descargar datos para {ticker}.")
 
             data_training = data[data.index < '2022-01-01'].copy()
-            training_set = data_training.iloc[:, 1:2].values # Usa la columna 'Open'
+            training_set = data_training[['Open']].values
             
             sc = MinMaxScaler(feature_range=(0, 1))
             training_set_scaled = sc.fit_transform(training_set)
@@ -92,7 +88,7 @@ def stock_prediction_pipeline():
 
     @task
     def evaluate_model(training_run_id: str, ticker: str, eval_experiment_name: str):
-        logging.info("--- Iniciando Tarea de Evaluación ---")
+        logging.info(f"--- Iniciando Tarea de Evaluación para {ticker} ---")
         mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI'))
         
         model_uri = f"runs:/{training_run_id}/model"
@@ -108,14 +104,9 @@ def stock_prediction_pipeline():
         start_eval_date = '2022-01-01'
         end_eval_date = datetime.today().strftime('%Y-%m-%d')
         dataset_total = yf.download(ticker, start='2010-01-01', end=end_eval_date, progress=False)
-        real_stock_price = dataset_total[dataset_total.index >= start_eval_date].iloc[:, 1:2].values
+        real_stock_price = dataset_total[dataset_total.index >= start_eval_date][['Open']].values
 
-        dataset_test = dataset_total[dataset_total.index >= start_eval_date]
-        
-        # --- LA CORRECCIÓN FINAL ESTÁ AQUÍ ---
-        # Nos aseguramos de usar solo la columna 'Open', igual que en el entrenamiento.
-        inputs = dataset_total[len(dataset_total) - len(dataset_test) - 60:].iloc[:, 1:2].values
-        
+        inputs = dataset_total[len(dataset_total) - len(real_stock_price) - 60:][['Open']].values
         inputs_scaled = loaded_scaler.transform(inputs)
         
         X_test = []
@@ -124,31 +115,34 @@ def stock_prediction_pipeline():
         X_test = np.array(X_test)
         X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
         
-        logging.info(f"Shape de y_true (real): {real_stock_price.shape}")
-        logging.info(f"Shape de X_test (para predecir): {X_test.shape}")
-        
+        if len(real_stock_price) != len(X_test):
+             min_len = min(len(real_stock_price), len(X_test))
+             logging.warning(f"Ajustando dimensiones de {len(real_stock_price)} y {len(X_test)} a {min_len}")
+             real_stock_price = real_stock_price[:min_len]
+             X_test = X_test[:min_len]
+
         predicted_stock_price_scaled = loaded_model.predict(X_test)
         predicted_stock_price = loaded_scaler.inverse_transform(predicted_stock_price_scaled)
         
-        logging.info(f"Shape de y_pred (predicho): {predicted_stock_price.shape}")
-        
         mse = mean_squared_error(real_stock_price, predicted_stock_price)
+        mae = mean_absolute_error(real_stock_price, predicted_stock_price)
         rmse = np.sqrt(mse)
         r2 = r2_score(real_stock_price, predicted_stock_price)
 
-        logging.info(f"\nMétricas de Evaluación: MSE: {mse:.4f}, RMSE: {rmse:.4f}, R²: {r2:.4f}")
+        logging.info(f"\nMétricas de Evaluación: MSE: {mse:.4f}, MAE: {mae:.4f}, RMSE: {rmse:.4f}, R²: {r2:.4f}")
 
         mlflow.set_experiment(eval_experiment_name)
-        with mlflow.start_run():
-            logging.info("Registrando métricas de evaluación en MLflow...")
+        with mlflow.start_run() as eval_run:
+            logging.info(f"Registrando métricas de evaluación en MLflow. Run ID: {eval_run.info.run_id}")
             mlflow.log_metric("mse", mse)
+            mlflow.log_metric("mae", mae)
             mlflow.log_metric("rmse", rmse)
             mlflow.log_metric("r2", r2)
+            mlflow.log_param("ticker", ticker)
             mlflow.log_param("parent_training_run_id", training_run_id)
 
         logging.info("--- Evaluación completada. ---")
 
-    # EXTRAER el ticker de la configuración del DAG
     ticker_param = "{{ params.ticker }}" 
 
     training_run_id_value = train_model(ticker=ticker_param, experiment_name=TRAINING_EXPERIMENT_NAME)
