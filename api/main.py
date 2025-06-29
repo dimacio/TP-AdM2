@@ -1,124 +1,115 @@
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, Form
 import requests
-from services.mlflow_service import load_model_and_scaler, get_best_run_id
+from services.mlflow_service import (
+    load_model_and_scaler, 
+    get_best_run_id, 
+    get_training_run_id_from_eval_run
+)
 from services.auth_service import create_access_token, verify_jwt_token
 from datetime import datetime, timedelta
 import redis
-from datetime import datetime
-from mlflow.tracking import MlflowClient
 import yfinance as yf
 import logging
-from schemas import MetricType, PredictInput, DagRunInput, StockColumn
-logging.basicConfig(level=logging.INFO)
+import numpy as np
+from schemas import MetricType, PredictInput, DagRunInput
 
+# Configuración de logging para ver todo
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+log = logging.getLogger(__name__)
 
+# --- Inicialización de Clientes y App ---
 redis_client = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
-
-
 airflow_api_host = "http://airflow-webserver:8080"
-
 app = FastAPI()
+N_SAMPLES = 60
 
-N_SAMPLES=60
-
-
-def get_last_n_ticker_prices(ticker: str, input_end_date: str, column: StockColumn, n: int = 60):    
+# --- Funciones Auxiliares ---
+def get_last_n_ticker_prices(ticker: str, input_end_date: str, column: str, n: int = N_SAMPLES):
+    log.info(f"Obteniendo precios para '{ticker}', columna '{column}'")
     target_date = datetime.strptime(input_end_date, '%Y-%m-%d')
     end_date = target_date.strftime('%Y-%m-%d')
-    start_date = (target_date - timedelta(days=int(n*1.5))).strftime('%Y-%m-%d')  # 90 days to ensure 60 trading days
+    start_date = (target_date - timedelta(days=int(n*2.0))).strftime('%Y-%m-%d')
     df = yf.download(ticker, start=start_date, end=end_date, progress=False)
-    last_n_ticker = df[column].dropna().values[-n:]
-
+    
+    log.info(f"Columnas descargadas de yfinance: {df.columns.to_list()}")
+    
+    if df.empty:
+        raise HTTPException(status_code=404, detail=f"No se encontraron datos para el ticker {ticker}.")
+    
+    last_n_ticker = df[column].dropna().tail(n).values
+    
     if len(last_n_ticker) < n:
-        raise HTTPException(status_code=400, detail="No hay suficientes datos para predecir.")
-
+        raise HTTPException(status_code=400, detail=f"No hay suficientes datos históricos para el ticker {ticker} para predecir (se necesitan {n}, se encontraron {len(last_n_ticker)}).")
     return last_n_ticker
 
-
+# --- Endpoints de la API ---
+# (Las funciones de health_check, login y trigger_new_dag_run no cambian)
 @app.get("/")
 def health_check():
     return {"status": "ok"}
 
 @app.post("/login")
-def login(username: str, password: str):
-    # Authenticate against Airflow using Basic Auth
+def login(username: str = Form(), password: str = Form()):
     url = f"{airflow_api_host}/api/v1/dags"
     try:
-        resp = requests.get(url, auth=(username, password), timeout=5)
-        print(f"Airflow response: {resp.status_code} - {resp.text}")
-        if resp.status_code != 200:
-           raise HTTPException(status_code=resp.status_code, detail=f"Airflow API error: {resp.text}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Airflow authentication failed: {str(e)}")
-
-    # Store password in Redis with TTL
+        resp = requests.get(url, auth=(username, password), timeout=10)
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        log.error(f"Error de autenticación con Airflow: {e}")
+        raise HTTPException(status_code=500, detail=f"Falló la autenticación con Airflow: {e}")
     redis_client.setex(f"airflow:{username}:password", 3600, password)
     access_token = create_access_token(data={"sub": username})
     return {"access_token": access_token, "token_type": "bearer"}
 
-
 @app.post("/trigger-new-dag-run")
-def trigger_new_dag_run(
-    data: DagRunInput,
-    username: str = Depends(verify_jwt_token)
-):
+def trigger_new_dag_run(data: DagRunInput, username: str = Depends(verify_jwt_token)):
     password = redis_client.get(f"airflow:{username}:password")
     if not password:
-        raise HTTPException(status_code=401, detail="Session expired, please log in again.")
-    
+        raise HTTPException(status_code=401, detail="Sesión expirada. Por favor, vuelve a iniciar sesión.")
     url = f"{airflow_api_host}/api/v1/dags/{data.dag_id}/dagRuns"
-    payload = {}
-
+    payload = {"conf": {"ticker": data.ticker}}
     try:
-        resp = requests.post(url, json=payload, auth=(username, password))
+        resp = requests.post(url, json=payload, auth=(username, password), timeout=30)
         resp.raise_for_status()
         return resp.json()
-    except requests.HTTPError as e:
-        raise HTTPException(
-            status_code=resp.status_code,
-            detail=f"Airflow API error: {resp.text}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
-
-@app.get("/get-best-model-run-id")
-def get_best_model_run_id(
-    experiment_name: str = "Stock_Prediction_Evaluation_TaskFlow",
-    metric: MetricType = "rmse",
-):
-    try:
-        run_id = get_best_run_id(experiment_name, metric)
-        return {"run_id": run_id}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"Airflow API error: {e.response.text}")
 
 @app.post("/predict-sample")
-def predict_sample(input: PredictInput):
-    run_id = get_best_run_id("Stock_Prediction_Evaluation_TaskFlow", metric=input.metric)
-    logging.info(f"Using run_id: {run_id} for prediction")
+def predict_sample(input: PredictInput, username: str = Depends(verify_jwt_token)):
+    try:
+        log.info(f"Buscando el mejor run en el experimento de evaluación: Stock_Prediction_Evaluation_TaskFlow")
+        
+        # --- CORRECCIÓN CLAVE: Pasar el ticker a la función de búsqueda ---
+        eval_run_id = get_best_run_id(
+            "Stock_Prediction_Evaluation_TaskFlow", 
+            ticker=input.ticker, 
+            metric=input.metric
+        )
+        
+        log.info(f"Mejor run de evaluación encontrado para {input.ticker}: {eval_run_id}. Buscando su run de entrenamiento padre...")
+        training_run_id = get_training_run_id_from_eval_run(eval_run_id)
+        
+        model, scaler = load_model_and_scaler(training_run_id)
+        
+        column_to_fetch = "Open"
+        log.info(f"Llamando a get_last_n_ticker_prices con la columna: '{column_to_fetch}'")
+        
+        last_n_samples_open = get_last_n_ticker_prices(input.ticker, input.date, column_to_fetch)
+        
+        features_scaled = scaler.transform(last_n_samples_open.reshape(-1, 1))
+        X_pred = features_scaled.reshape(1, N_SAMPLES, 1)
+        
+        pred_scaled = model.predict(X_pred)
+        pred = scaler.inverse_transform(pred_scaled)[0][0]
+        
+        log.info(f"Predicción para {input.ticker} generada exitosamente: {pred}")
+        return {"ticker": input.ticker, "date": input.date, "prediction": float(pred)}
 
-    client = MlflowClient()
-    artifacts = client.list_artifacts(run_id)
-    logging.info(f"Artifacts for run {run_id}: {[a.path for a in artifacts]}")
-
-    # 1. Load model and scaler
-    model, scaler = load_model_and_scaler(run_id)
-
-    # Get last 60 days of 'Open' prices before the given date
-    last_n_samples_open = get_last_n_ticker_prices(input.ticker, input.date, 'Open', N_SAMPLES)
-
-    features_scaled = scaler.transform(last_n_samples_open.reshape(-1, 1))
-    X_pred = features_scaled.reshape(1, N_SAMPLES, 1)
-
-    pred_scaled = model.predict(X_pred)
-    pred = scaler.inverse_transform(pred_scaled)[0][0]
-
-    return {
-        "ticker": input.ticker,
-        "date": input.date,
-        "prediction": float(pred)
-    }
+    except ValueError as e:
+        # Este error ahora se activará si no hay modelo para el ticker
+        log.error(f"Error de valor durante la predicción: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        log.error(f"Error inesperado en predicción: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Ocurrió un error interno al procesar la predicción.")

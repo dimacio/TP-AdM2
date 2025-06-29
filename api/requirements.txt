@@ -8,3 +8,5 @@ numpy
 yfinance
 tensorflow
 boto3
+python-multipart 
+python-jose[cryptography]
